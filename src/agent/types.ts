@@ -40,4 +40,8 @@ export interface MemoryStore {
   entries: MemoryEntry[];
 }
 
+export interface AgentContext {
+  workingDirectory: string;
+}
+
 export const EVICTION_THRESHOLD_BYTES = 80 * 1024;

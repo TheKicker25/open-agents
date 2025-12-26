@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { addMemoryEntry } from "../../state/memory-store";
+import type { AgentContext } from "../../types";
 
 export const memorySaveTool = tool({
   description: `Save information to long-term memory for recall in future conversations.
@@ -27,8 +28,8 @@ IMPORTANT:
   }),
   execute: async ({ content, tags, metadata }, { experimental_context }) => {
     try {
-      const context = experimental_context as { workingDirectory?: string } | undefined;
-      const workingDirectory = context?.workingDirectory ?? process.cwd();
+      const context = experimental_context as AgentContext;
+      const workingDirectory = context.workingDirectory ?? process.cwd();
 
       const entry = await addMemoryEntry(workingDirectory, {
         content,

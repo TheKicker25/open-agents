@@ -26,7 +26,7 @@ import { devToolsMiddleware } from "@ai-sdk/devtools";
 import { addCacheControl } from "./utils";
 
 const callOptionsSchema = z.object({
-  workingDirectory: z.string().optional(),
+  workingDirectory: z.string(),
   customInstructions: z.string().optional(),
   todos: z.array(todoItemSchema).optional(),
   scratchpad: z

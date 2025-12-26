@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { spawn } from "child_process";
+import type { AgentContext } from "../../types";
 
 const TIMEOUT_MS = 120_000;
 const MAX_OUTPUT_LENGTH = 50_000;
@@ -97,8 +98,9 @@ IMPORTANT:
       .optional()
       .describe("Working directory for the command (absolute path)"),
   }),
-  execute: async ({ command, cwd }) => {
-    const workingDir = cwd ?? process.cwd();
+  execute: async ({ command, cwd }, { experimental_context }) => {
+    const context = experimental_context as AgentContext;
+    const workingDir = cwd ?? context.workingDirectory ?? process.cwd();
 
     const result = await executeCommand(command, workingDir, TIMEOUT_MS);
 
