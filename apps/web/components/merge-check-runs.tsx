@@ -433,7 +433,7 @@ export function CheckRunsList({
                       key={state}
                       state={state}
                       checkRuns={runs}
-                      defaultOpen={state !== "passed"}
+                      defaultOpen
                     />
                   );
                 })}
