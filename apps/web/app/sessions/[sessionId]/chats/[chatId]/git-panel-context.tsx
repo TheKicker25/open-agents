@@ -11,7 +11,7 @@ import {
   type RefObject,
 } from "react";
 
-export type GitPanelTab = "code" | "diff" | "checks";
+export type GitPanelTab = "code" | "diff" | "pr";
 export type ActiveView = "chat" | "diff";
 
 type GitPanelContextValue = {

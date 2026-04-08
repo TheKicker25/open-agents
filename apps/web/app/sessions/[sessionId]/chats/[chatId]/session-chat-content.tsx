@@ -129,10 +129,7 @@ const DiffViewer = dynamic(
   () => import("./diff-viewer").then((m) => m.DiffViewer),
   { ssr: false },
 );
-const CreatePRDialog = dynamic(
-  () => import("@/components/create-pr-dialog").then((m) => m.CreatePRDialog),
-  { ssr: false },
-);
+
 const MergePrDialog = dynamic(
   () => import("@/components/merge-pr-dialog").then((m) => m.MergePrDialog),
   { ssr: false },
@@ -141,10 +138,7 @@ const ClosePrDialog = dynamic(
   () => import("@/components/close-pr-dialog").then((m) => m.ClosePrDialog),
   { ssr: false },
 );
-const CommitDialog = dynamic(
-  () => import("@/components/commit-dialog").then((m) => m.CommitDialog),
-  { ssr: false },
-);
+
 const CreateRepoDialog = dynamic(
   () =>
     import("@/components/create-repo-dialog").then((m) => m.CreateRepoDialog),
@@ -860,8 +854,6 @@ export function SessionChatContent({
   const [isCreatingSandbox, setIsCreatingSandbox] = useState(false);
   const [isRestoringSnapshot, setIsRestoringSnapshot] = useState(false);
   const [isUnarchiving, setIsUnarchiving] = useState(false);
-  const [commitDialogOpen, setCommitDialogOpen] = useState(false);
-  const [prDialogOpen, setPrDialogOpen] = useState(false);
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const [repoDialogOpen, setRepoDialogOpen] = useState(false);
@@ -2566,20 +2558,12 @@ export function SessionChatContent({
 
   const hasUncommittedGitChanges = gitStatus?.hasUncommittedChanges ?? false;
   const hasUnpushedCommits = gitStatus?.hasUnpushedCommits ?? false;
-  const hasBranchDiff =
-    diff != null
-      ? diff.summary.totalAdditions > 0 || diff.summary.totalDeletions > 0
-      : (session.linesAdded ?? 0) > 0 || (session.linesRemoved ?? 0) > 0;
-  const isCreatePrBranchReady = Boolean(session?.branch);
-  const canCreatePr =
-    hasRepo && !hasExistingPr && !hasUncommittedGitChanges && hasBranchDiff;
   const showCommitAction =
     hasRepo &&
     (hasUncommittedGitChanges || (hasExistingPr && hasUnpushedCommits));
   const hasOpenPr = hasExistingPr && session.prStatus === "open";
   const canMergeAndArchive = hasOpenPr && !showCommitAction && !isArchived;
   const canCloseAndArchive = hasOpenPr && !isArchived;
-  const commitActionLabel = hasExistingPr ? "Commit & Push" : "Commit Changes";
   const openExistingPr = () => {
     if (!existingPrUrl) {
       return;
@@ -2694,17 +2678,11 @@ export function SessionChatContent({
       hasRepo={hasRepo}
       hasExistingPr={hasExistingPr}
       existingPrUrl={existingPrUrl}
-      canCreatePr={canCreatePr}
-      isCreatePrBranchReady={isCreatePrBranchReady}
-      showCommitAction={showCommitAction}
-      commitActionLabel={commitActionLabel}
       hasUncommittedGitChanges={hasUncommittedGitChanges}
       canMergeAndArchive={canMergeAndArchive}
       supportsRepoCreation={supportsRepoCreation}
       supportsDiff={supportsDiff}
       hasDiff={Boolean(diff || session.cachedDiff)}
-      isAutoCommitting={isAutoCommitting}
-      isChatReady={isChatReady}
       prDeploymentUrl={prDeploymentUrl}
       isDeploymentStale={isDeploymentStale}
       buildingDeploymentUrl={buildingDeploymentUrl}
@@ -2713,8 +2691,6 @@ export function SessionChatContent({
       codeEditor={codeEditor}
       diffFiles={diff?.files ?? null}
       diffSummary={diff?.summary ?? null}
-      onCommitClick={() => setCommitDialogOpen(true)}
-      onCreatePrClick={() => setPrDialogOpen(true)}
       onCreateRepoClick={() => setRepoDialogOpen(true)}
       onOpenPreview={
         isDeploymentStale && buildingDeploymentUrl
@@ -2749,6 +2725,14 @@ export function SessionChatContent({
         }
 
         void sendMessageWithPendingState({ text });
+      }}
+      hasSandbox={sandboxInfo !== null}
+      gitStatus={gitStatus}
+      refreshGitStatus={refreshGitStatus}
+      onCommitted={handleCommitted}
+      onPrDetected={(pr) => {
+        updateSessionPullRequest(pr);
+        void refreshGitStatus().catch(() => {});
       }}
     />
   );
@@ -3676,20 +3660,6 @@ export function SessionChatContent({
         </div>
     </div>
 
-      {/* Create PR Dialog */}
-      {session && (
-        <CreatePRDialog
-          open={prDialogOpen}
-          onOpenChange={setPrDialogOpen}
-          session={session}
-          hasSandbox={sandboxInfo !== null}
-          onGitMessage={upsertSyntheticAssistantGitMessage}
-          onPrDetected={(pr) => {
-            updateSessionPullRequest(pr);
-            void refreshGitStatus().catch(() => {});
-          }}
-        />
-      )}
 
       {/* Merge PR Dialog */}
       {session && (
@@ -3741,20 +3711,6 @@ export function SessionChatContent({
         />
       )}
 
-      {/* Commit Dialog */}
-      {session && (
-        <CommitDialog
-          open={commitDialogOpen}
-          onOpenChange={setCommitDialogOpen}
-          session={session}
-          hasSandbox={sandboxInfo !== null}
-          gitStatus={gitStatus}
-          refreshGitStatus={refreshGitStatus}
-          onGitMessage={upsertSyntheticAssistantGitMessage}
-          onOpenCreatePr={() => setPrDialogOpen(true)}
-          onCommitted={handleCommitted}
-        />
-      )}
 
       {/* Create Repo Dialog */}
       {session && (

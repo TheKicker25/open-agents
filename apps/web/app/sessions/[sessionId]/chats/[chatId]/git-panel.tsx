@@ -6,7 +6,7 @@ import {
   ChevronDown,
   ExternalLink,
   FolderGit2,
-  GitCommit,
+  GitBranch,
   GitPullRequest,
   Loader2,
   Square,
@@ -24,6 +24,8 @@ import type {
   PullRequestMergeMethod,
 } from "@/lib/github/client";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import {
   DropdownMenu,
@@ -33,6 +35,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { CheckRunsList } from "@/components/merge-check-runs";
 import { cn } from "@/lib/utils";
+import {
+  commitAndPushSessionChanges,
+  createSessionBranch,
+  fetchRepoBranches,
+  generatePullRequestContent,
+} from "@/lib/git-flow-client";
+import type { SessionGitStatus } from "@/hooks/use-session-git-status";
 import { useGitPanel } from "./git-panel-context";
 import type { DevServerControls } from "./hooks/use-dev-server";
 import type { CodeEditorControls } from "./hooks/use-code-editor";
@@ -69,19 +78,11 @@ type GitPanelProps = {
   hasRepo: boolean;
   hasExistingPr: boolean;
   existingPrUrl: string | null;
-  canCreatePr: boolean;
-  isCreatePrBranchReady: boolean;
-  showCommitAction: boolean;
-  commitActionLabel: string;
   hasUncommittedGitChanges: boolean;
   canMergeAndArchive: boolean;
   supportsRepoCreation: boolean;
   supportsDiff: boolean;
   hasDiff: boolean;
-
-  // Auto-commit
-  isAutoCommitting: boolean;
-  isChatReady: boolean;
 
   // Preview/deployment
   prDeploymentUrl: string | null;
@@ -101,8 +102,6 @@ type GitPanelProps = {
   } | null;
 
   // Actions
-  onCommitClick: () => void;
-  onCreatePrClick: () => void;
   onCreateRepoClick: () => void;
   onOpenPreview: () => void;
   onOpenPr: () => void;
@@ -111,6 +110,18 @@ type GitPanelProps = {
   // Merge
   onMerged: (result: MergePullRequestResponse) => Promise<void> | void;
   onFixChecks?: (failedRuns: PullRequestCheckRun[]) => Promise<void> | void;
+
+  // For inline commit
+  hasSandbox: boolean;
+  gitStatus: SessionGitStatus | null;
+  refreshGitStatus: () => Promise<SessionGitStatus | undefined>;
+  onCommitted?: () => void;
+
+  // For inline PR creation
+  onPrDetected?: (info: {
+    prNumber: number;
+    prStatus: "open" | "merged" | "closed";
+  }) => void;
 };
 
 /* ------------------------------------------------------------------ */
@@ -268,6 +279,533 @@ function DiffFileList({ files }: { files: DiffFile[] }) {
         );
       })}
     </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Inline commit panel (replaces the commit dialog)                    */
+/* ------------------------------------------------------------------ */
+
+function InlineCommitPanel({
+  session,
+  hasSandbox,
+  gitStatus,
+  refreshGitStatus,
+  onCommitted,
+}: {
+  session: Session;
+  hasSandbox: boolean;
+  gitStatus: SessionGitStatus | null;
+  refreshGitStatus: () => Promise<SessionGitStatus | undefined>;
+  onCommitted?: () => void;
+}) {
+  const [commitTitle, setCommitTitle] = useState("");
+  const [commitBody, setCommitBody] = useState("");
+  const [isCommitting, setIsCommitting] = useState(false);
+  const [commitError, setCommitError] = useState<string | null>(null);
+  const [commitSuccess, setCommitSuccess] = useState<{
+    commitSha?: string;
+    commitMessage?: string;
+  } | null>(null);
+  const [baseBranch, setBaseBranch] = useState("main");
+  const [isCreatingBranch, setIsCreatingBranch] = useState(false);
+  const [resolvedBranch, setResolvedBranch] = useState<string | null>(null);
+  const successTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const hasUncommittedChanges = gitStatus?.hasUncommittedChanges ?? false;
+  const hasUnpushedCommits = gitStatus?.hasUnpushedCommits ?? false;
+  const hasPendingGitWork = hasUncommittedChanges || hasUnpushedCommits;
+
+  const branchFromStatus =
+    resolvedBranch ??
+    (gitStatus?.branch && gitStatus.branch !== "HEAD"
+      ? gitStatus.branch
+      : null);
+  const currentBranch = branchFromStatus ?? session.branch ?? baseBranch;
+  const displayBranch = currentBranch === "HEAD" ? baseBranch : currentBranch;
+  const isDetachedHead = gitStatus?.isDetachedHead ?? false;
+  const needsNewBranch = displayBranch === baseBranch || isDetachedHead;
+
+  // Fetch branches on mount
+  useEffect(() => {
+    if (!session.repoOwner || !session.repoName) return;
+    void fetchRepoBranches(session.repoOwner, session.repoName)
+      .then((data) => {
+        setBaseBranch(data.defaultBranch);
+      })
+      .catch(() => {});
+  }, [session.repoOwner, session.repoName]);
+
+  // Cleanup timeout
+  useEffect(() => {
+    return () => {
+      if (successTimeoutRef.current) {
+        clearTimeout(successTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleCreateBranch = async () => {
+    if (!hasSandbox) return;
+    setIsCreatingBranch(true);
+    setCommitError(null);
+    try {
+      const result = await createSessionBranch({
+        sessionId: session.id,
+        sessionTitle: session.title,
+        baseBranch,
+        branchName: displayBranch,
+      });
+      if (result.branchName !== "HEAD") {
+        setResolvedBranch(result.branchName);
+      }
+      await refreshGitStatus();
+    } catch (err) {
+      setCommitError(
+        err instanceof Error ? err.message : "Failed to create branch",
+      );
+    } finally {
+      setIsCreatingBranch(false);
+    }
+  };
+
+  const handleCommit = async () => {
+    if (!hasSandbox || !hasPendingGitWork) return;
+    setIsCommitting(true);
+    setCommitError(null);
+    setCommitSuccess(null);
+
+    try {
+      const response = await commitAndPushSessionChanges({
+        sessionId: session.id,
+        sessionTitle: session.title,
+        baseBranch,
+        branchName: displayBranch,
+        ...(commitTitle.trim()
+          ? { commitTitle: commitTitle.trim(), commitBody: commitBody.trim() }
+          : {}),
+      });
+
+      if (response.branchName && response.branchName !== "HEAD") {
+        setResolvedBranch(response.branchName);
+      }
+
+      setCommitSuccess({
+        commitSha: response.gitActions?.commitSha,
+        commitMessage: response.gitActions?.commitMessage,
+      });
+      setCommitTitle("");
+      setCommitBody("");
+
+      onCommitted?.();
+
+      // Clear success after 3 seconds
+      successTimeoutRef.current = setTimeout(() => {
+        setCommitSuccess(null);
+      }, 3000);
+    } catch (err) {
+      setCommitError(
+        err instanceof Error ? err.message : "Failed to commit and push",
+      );
+    } finally {
+      setIsCommitting(false);
+    }
+  };
+
+  // Needs branch creation
+  if (needsNewBranch) {
+    return (
+      <div className="space-y-2">
+        <div className="rounded-md border border-border bg-muted/40 p-2 text-xs text-muted-foreground">
+          {isDetachedHead
+            ? "Detached HEAD — create a branch first."
+            : "On base branch — create a new branch first."}
+        </div>
+        <Button
+          size="sm"
+          className="w-full text-xs"
+          onClick={() => void handleCreateBranch()}
+          disabled={isCreatingBranch || !hasSandbox}
+        >
+          {isCreatingBranch ? (
+            <>
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              Creating branch...
+            </>
+          ) : (
+            <>
+              <GitBranch className="mr-1.5 h-3.5 w-3.5" />
+              Create branch
+            </>
+          )}
+        </Button>
+        {commitError && (
+          <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">
+            {commitError}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Success state
+  if (commitSuccess) {
+    return (
+      <div className="flex items-center gap-2 rounded-md border border-green-500/30 bg-green-500/10 p-2 text-xs text-green-700 dark:text-green-300">
+        <Check className="h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0 truncate">
+          {commitSuccess.commitMessage ?? "Changes committed & pushed"}
+        </span>
+      </div>
+    );
+  }
+
+  // No uncommitted changes
+  if (!hasPendingGitWork) {
+    return (
+      <div className="px-2 py-3 text-center text-xs text-muted-foreground">
+        No uncommitted changes
+      </div>
+    );
+  }
+
+  // Commit form
+  return (
+    <div className="space-y-2">
+      <Input
+        placeholder="Commit message (optional)"
+        value={commitTitle}
+        onChange={(e) => setCommitTitle(e.target.value)}
+        disabled={isCommitting}
+        className="h-7 text-xs"
+      />
+      <Textarea
+        placeholder="Description (optional)"
+        value={commitBody}
+        onChange={(e) => setCommitBody(e.target.value)}
+        disabled={isCommitting}
+        rows={2}
+        className="resize-none text-xs field-sizing-fixed"
+      />
+      <Button
+        size="sm"
+        className="w-full text-xs"
+        onClick={() => void handleCommit()}
+        disabled={isCommitting || !hasSandbox}
+      >
+        {isCommitting ? (
+          <>
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            Committing...
+          </>
+        ) : (
+          "Commit & Push"
+        )}
+      </Button>
+      {commitError && (
+        <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">
+          {commitError}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Inline PR creation panel                                            */
+/* ------------------------------------------------------------------ */
+
+function InlinePrCreatePanel({
+  session,
+  hasSandbox,
+  gitStatus,
+  refreshGitStatus,
+  hasUncommittedGitChanges,
+  onPrDetected,
+}: {
+  session: Session;
+  hasSandbox: boolean;
+  gitStatus: SessionGitStatus | null;
+  refreshGitStatus: () => Promise<SessionGitStatus | undefined>;
+  hasUncommittedGitChanges: boolean;
+  onPrDetected?: (info: {
+    prNumber: number;
+    prStatus: "open" | "merged" | "closed";
+  }) => void;
+}) {
+  const [prTitle, setPrTitle] = useState("");
+  const [prBody, setPrBody] = useState("");
+  const [isCreatingPr, setIsCreatingPr] = useState(false);
+  const [prError, setPrError] = useState<string | null>(null);
+  const [prSuccess, setPrSuccess] = useState<{
+    prUrl: string;
+    requiresManualCreation?: boolean;
+  } | null>(null);
+  const [baseBranch, setBaseBranch] = useState("main");
+  const [isCreatingBranch, setIsCreatingBranch] = useState(false);
+  const [resolvedBranch, setResolvedBranch] = useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [prHeadOwner, setPrHeadOwner] = useState<string | null>(null);
+
+  const branchFromStatus =
+    resolvedBranch ??
+    (gitStatus?.branch && gitStatus.branch !== "HEAD"
+      ? gitStatus.branch
+      : null);
+  const currentBranch = branchFromStatus ?? session.branch ?? baseBranch;
+  const displayBranch = currentBranch === "HEAD" ? baseBranch : currentBranch;
+  const isDetachedHead = gitStatus?.isDetachedHead ?? false;
+  const needsNewBranch = displayBranch === baseBranch || isDetachedHead;
+
+  const normalizedRepoOwner = session.repoOwner?.toLowerCase() ?? null;
+  const normalizedHeadOwner = prHeadOwner?.toLowerCase() ?? null;
+  const shouldOpenCompareInsteadOfApi = Boolean(
+    normalizedRepoOwner &&
+      normalizedHeadOwner &&
+      normalizedHeadOwner !== normalizedRepoOwner,
+  );
+
+  // Fetch branches on mount
+  useEffect(() => {
+    if (!session.repoOwner || !session.repoName) return;
+    void fetchRepoBranches(session.repoOwner, session.repoName)
+      .then((data) => {
+        setBaseBranch(data.defaultBranch);
+      })
+      .catch(() => {});
+  }, [session.repoOwner, session.repoName]);
+
+  const handleCreateBranch = async () => {
+    if (!hasSandbox) return;
+    setIsCreatingBranch(true);
+    setPrError(null);
+    try {
+      const result = await createSessionBranch({
+        sessionId: session.id,
+        sessionTitle: session.title,
+        baseBranch,
+        branchName: displayBranch,
+      });
+      if (result.branchName !== "HEAD") {
+        setResolvedBranch(result.branchName);
+      }
+      await refreshGitStatus();
+    } catch (err) {
+      setPrError(
+        err instanceof Error ? err.message : "Failed to create branch",
+      );
+    } finally {
+      setIsCreatingBranch(false);
+    }
+  };
+
+  const handleCreatePr = async () => {
+    setIsCreatingPr(true);
+    setPrError(null);
+
+    try {
+      let finalTitle = prTitle.trim();
+      let finalBody = prBody.trim();
+
+      // Auto-generate if title is empty
+      if (!finalTitle) {
+        setIsGenerating(true);
+        try {
+          const generated = await generatePullRequestContent({
+            sessionId: session.id,
+            sessionTitle: session.title,
+            baseBranch,
+            branchName: displayBranch,
+          });
+          finalTitle = generated.title ?? session.title;
+          finalBody = finalBody || generated.body ?? "";
+          if (generated.prHeadOwner) {
+            setPrHeadOwner(generated.prHeadOwner);
+          }
+          if (generated.branchName && generated.branchName !== "HEAD") {
+            setResolvedBranch(generated.branchName);
+          }
+        } finally {
+          setIsGenerating(false);
+        }
+      }
+
+      // Check if we need to open compare page instead
+      const headOwner = prHeadOwner?.trim() || session.repoOwner;
+      const ownerMismatch =
+        headOwner &&
+        session.repoOwner &&
+        headOwner.toLowerCase() !== session.repoOwner.toLowerCase();
+
+      if (ownerMismatch && session.repoOwner && session.repoName) {
+        const headRef = `${headOwner}:${displayBranch}`;
+        const compareUrl = new URL(
+          `https://github.com/${session.repoOwner}/${session.repoName}/compare/${encodeURIComponent(baseBranch)}...${encodeURIComponent(headRef)}`,
+        );
+        compareUrl.searchParams.set("expand", "1");
+        if (finalTitle) compareUrl.searchParams.set("title", finalTitle);
+        if (finalBody) compareUrl.searchParams.set("body", finalBody);
+        window.open(compareUrl.toString(), "_blank", "noopener,noreferrer");
+        setPrSuccess({ prUrl: compareUrl.toString(), requiresManualCreation: true });
+        return;
+      }
+
+      const res = await fetch("/api/pr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: session.id,
+          repoUrl: session.cloneUrl,
+          branchName: displayBranch,
+          title: finalTitle,
+          body: finalBody,
+          baseBranch,
+          headOwner: prHeadOwner ?? undefined,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to create PR");
+      }
+
+      setPrSuccess({
+        prUrl: data.prUrl,
+        requiresManualCreation: Boolean(data.requiresManualCreation),
+      });
+
+      if (typeof data.prNumber === "number") {
+        onPrDetected?.({
+          prNumber: data.prNumber,
+          prStatus:
+            data.prStatus === "merged" || data.prStatus === "closed"
+              ? data.prStatus
+              : "open",
+        });
+      }
+    } catch (err) {
+      setPrError(err instanceof Error ? err.message : "Failed to create PR");
+    } finally {
+      setIsCreatingPr(false);
+    }
+  };
+
+  // Success state
+  if (prSuccess) {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 rounded-md border border-green-500/30 bg-green-500/10 p-2 text-xs text-green-700 dark:text-green-300">
+          <Check className="h-3.5 w-3.5 shrink-0" />
+          <span>
+            {prSuccess.requiresManualCreation
+              ? "Compare page opened"
+              : "Pull request created!"}
+          </span>
+        </div>
+        {/* oxlint-disable-next-line nextjs/no-html-link-for-pages */}
+        <a
+          href={prSuccess.prUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1 text-xs text-blue-500 hover:underline"
+        >
+          {prSuccess.requiresManualCreation
+            ? "Open compare page"
+            : "View on GitHub"}
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      </div>
+    );
+  }
+
+  // Needs branch creation
+  if (needsNewBranch) {
+    return (
+      <div className="space-y-2">
+        <div className="rounded-md border border-border bg-muted/40 p-2 text-xs text-muted-foreground">
+          {isDetachedHead
+            ? "Detached HEAD — create a branch first."
+            : "On base branch — create a new branch first."}
+        </div>
+        <Button
+          size="sm"
+          className="w-full text-xs"
+          onClick={() => void handleCreateBranch()}
+          disabled={isCreatingBranch || !hasSandbox}
+        >
+          {isCreatingBranch ? (
+            <>
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              Creating branch...
+            </>
+          ) : (
+            <>
+              <GitBranch className="mr-1.5 h-3.5 w-3.5" />
+              Create branch
+            </>
+          )}
+        </Button>
+        {prError && (
+          <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">
+            {prError}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Uncommitted changes warning
+  if (hasUncommittedGitChanges) {
+    return (
+      <div className="px-2 py-3 text-center text-xs text-muted-foreground">
+        Commit your changes before creating a pull request.
+      </div>
+    );
+  }
+
+  // PR creation form
+  return (
+    <div className="space-y-2">
+      <Input
+        placeholder="PR title (optional)"
+        value={prTitle}
+        onChange={(e) => setPrTitle(e.target.value)}
+        disabled={isCreatingPr}
+        className="h-7 text-xs"
+      />
+      <Textarea
+        placeholder="Description (optional)"
+        value={prBody}
+        onChange={(e) => setPrBody(e.target.value)}
+        disabled={isCreatingPr}
+        rows={3}
+        className="resize-none text-xs field-sizing-fixed"
+      />
+      <Button
+        size="sm"
+        className="w-full text-xs"
+        onClick={() => void handleCreatePr()}
+        disabled={isCreatingPr || !hasSandbox}
+      >
+        {isCreatingPr ? (
+          <>
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            {isGenerating ? "Generating..." : "Creating..."}
+          </>
+        ) : (
+          <>
+            <GitPullRequest className="mr-1.5 h-3.5 w-3.5" />
+            Create Pull Request
+          </>
+        )}
+      </Button>
+      {prError && (
+        <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">
+          {prError}
+        </div>
+      )}
     </div>
   );
 }
@@ -616,17 +1154,11 @@ export function GitPanel(props: GitPanelProps) {
     hasRepo,
     hasExistingPr,
     existingPrUrl,
-    canCreatePr,
-    isCreatePrBranchReady,
-    showCommitAction,
-    commitActionLabel,
     hasUncommittedGitChanges,
     canMergeAndArchive,
     supportsRepoCreation,
     supportsDiff,
     hasDiff,
-    isAutoCommitting,
-    isChatReady,
     prDeploymentUrl,
     isDeploymentStale,
     buildingDeploymentUrl,
@@ -635,63 +1167,18 @@ export function GitPanel(props: GitPanelProps) {
     codeEditor,
     diffFiles,
     diffSummary,
-    onCommitClick,
-    onCreatePrClick,
     onCreateRepoClick,
     onOpenPreview,
     onOpenPr,
     onOpenBuildingDeployment,
     onMerged,
     onFixChecks,
+    hasSandbox,
+    gitStatus,
+    refreshGitStatus,
+    onCommitted,
+    onPrDetected,
   } = props;
-
-  // Determine primary action button (compact, sits in the top bar)
-  const renderPrimaryAction = () => {
-    if (hasRepo && showCommitAction) {
-      return (
-        <Button
-          size="sm"
-          className="h-7 text-xs"
-          disabled={isAutoCommitting || !isChatReady}
-          onClick={onCommitClick}
-        >
-          {isAutoCommitting ? (
-            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <GitCommit className="mr-1.5 h-3.5 w-3.5" />
-          )}
-          {isAutoCommitting ? "Committing..." : commitActionLabel}
-        </Button>
-      );
-    }
-
-    if (hasRepo && canCreatePr && isCreatePrBranchReady) {
-      return (
-        <Button size="sm" className="h-7 text-xs" onClick={onCreatePrClick}>
-          <GitPullRequest className="mr-1.5 h-3.5 w-3.5" />
-          Create PR
-        </Button>
-      );
-    }
-
-    if (!hasRepo && supportsRepoCreation) {
-      return (
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 text-xs"
-          onClick={onCreateRepoClick}
-        >
-          <FolderGit2 className="mr-1.5 h-3.5 w-3.5" />
-          Create Repo
-        </Button>
-      );
-    }
-
-    return null;
-  };
-
-  const primaryAction = renderPrimaryAction();
 
   const hasDiffChanges =
     diffSummary &&
@@ -699,7 +1186,7 @@ export function GitPanel(props: GitPanelProps) {
 
   return (
     <div className="flex h-full w-72 shrink-0 flex-col border-l border-border bg-background xl:w-80">
-      {/* Panel top bar: PR link (left) + action button (right) */}
+      {/* Panel top bar: PR link or branch name */}
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
         {/* Left: PR link or repo info */}
         <div className="flex min-w-0 items-center gap-2">
@@ -722,15 +1209,25 @@ export function GitPanel(props: GitPanelProps) {
           ) : null}
         </div>
 
-        {/* Right: primary action */}
+        {/* Right: Create repo button if no repo */}
         <div className="shrink-0">
-          {primaryAction}
+          {!hasRepo && supportsRepoCreation && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={onCreateRepoClick}
+            >
+              <FolderGit2 className="mr-1.5 h-3.5 w-3.5" />
+              Create Repo
+            </Button>
+          )}
         </div>
       </div>
 
       {/* Tab bar */}
       <div className="flex items-center gap-0.5 border-b border-border px-3 py-1">
-        {(["code", "diff", "checks"] as const).map((tab) => (
+        {(["code", "diff", "pr"] as const).map((tab) => (
           <button
             key={tab}
             type="button"
@@ -742,7 +1239,11 @@ export function GitPanel(props: GitPanelProps) {
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
-            {tab === "code" ? "Code" : tab === "diff" ? "Changes" : "Checks"}
+            {tab === "code"
+              ? "Code"
+              : tab === "diff"
+                ? "Changes"
+                : "Pull Request"}
             {tab === "diff" && hasDiffChanges && (
               <span className="ml-1 text-[10px] text-muted-foreground">
                 {diffFiles?.length ?? 0}
@@ -832,11 +1333,34 @@ export function GitPanel(props: GitPanelProps) {
 
         {gitPanelTab === "diff" && (
           <div className="p-2">
+            {/* Inline commit UI */}
+            {hasRepo && (
+              <div className="mb-2">
+                <InlineCommitPanel
+                  session={session}
+                  hasSandbox={hasSandbox}
+                  gitStatus={gitStatus}
+                  refreshGitStatus={refreshGitStatus}
+                  onCommitted={onCommitted}
+                />
+              </div>
+            )}
+
+            {/* Separator */}
+            {hasRepo &&
+              diffFiles &&
+              diffFiles.length > 0 && (
+                <div className="mb-2 border-t border-border" />
+              )}
+
             {diffFiles && diffFiles.length > 0 ? (
               <>
                 {hasDiffChanges && (
                   <div className="mb-2 flex items-center gap-2 px-2 text-xs text-muted-foreground">
-                    <span>{diffFiles.length} file{diffFiles.length !== 1 ? "s" : ""} changed</span>
+                    <span>
+                      {diffFiles.length} file
+                      {diffFiles.length !== 1 ? "s" : ""} changed
+                    </span>
                     <span className="text-green-600 dark:text-green-500">
                       +{diffSummary!.totalAdditions}
                     </span>
@@ -855,23 +1379,34 @@ export function GitPanel(props: GitPanelProps) {
           </div>
         )}
 
-        {gitPanelTab === "checks" && (
+        {gitPanelTab === "pr" && (
           <div className="p-3">
-            {canMergeAndArchive ? (
-              <InlineMergePanel
+            {hasExistingPr ? (
+              canMergeAndArchive ? (
+                <InlineMergePanel
+                  session={session}
+                  onMerged={onMerged}
+                  onFixChecks={onFixChecks}
+                />
+              ) : (
+                <div className="text-center text-xs text-muted-foreground py-6">
+                  {hasUncommittedGitChanges
+                    ? "Commit changes before merging"
+                    : "No open PR to merge"}
+                </div>
+              )
+            ) : hasRepo ? (
+              <InlinePrCreatePanel
                 session={session}
-                onMerged={onMerged}
-                onFixChecks={onFixChecks}
+                hasSandbox={hasSandbox}
+                gitStatus={gitStatus}
+                refreshGitStatus={refreshGitStatus}
+                hasUncommittedGitChanges={hasUncommittedGitChanges}
+                onPrDetected={onPrDetected}
               />
-            ) : hasExistingPr ? (
-              <div className="text-center text-xs text-muted-foreground py-6">
-                {showCommitAction
-                  ? "Commit changes before merging"
-                  : "No open PR to merge"}
-              </div>
             ) : (
               <div className="text-center text-xs text-muted-foreground py-6">
-                Create a PR to see checks
+                Create a repo first
               </div>
             )}
           </div>
