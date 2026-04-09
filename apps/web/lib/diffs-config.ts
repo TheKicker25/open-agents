@@ -90,35 +90,29 @@ function renderCustomSeparator(
     icon.textContent =
       direction === "up" ? "↓" : direction === "down" ? "↑" : "↕";
 
-    const label = document.createElement("span");
-    Object.assign(label.style, {
-      marginLeft: "8px",
-      whiteSpace: "nowrap",
-    });
-    label.textContent = labelText;
-
-    button.append(icon, label);
+    button.append(icon);
     button.addEventListener("click", () =>
       instance.expandHunk(hunkData.hunkIndex, direction),
     );
     return button;
   }
 
-  const controls = document.createElement("div");
-  Object.assign(controls.style, {
-    display: "inline-flex",
-    gap: "4px",
-  });
-
+  // Expand controls (if the hunk is expandable)
   if (hunkData.expandable?.up && hunkData.expandable?.down) {
-    controls.append(createControl("both"));
+    wrapper.append(createControl("both"));
   } else if (hunkData.expandable?.up) {
-    controls.append(createControl("up"));
+    wrapper.append(createControl("up"));
   } else if (hunkData.expandable?.down) {
-    controls.append(createControl("down"));
+    wrapper.append(createControl("down"));
   }
 
-  wrapper.append(controls);
+  // Always show the label
+  const label = document.createElement("span");
+  Object.assign(label.style, {
+    whiteSpace: "nowrap",
+  });
+  label.textContent = labelText;
+  wrapper.append(label);
   return wrapper;
 }
 
