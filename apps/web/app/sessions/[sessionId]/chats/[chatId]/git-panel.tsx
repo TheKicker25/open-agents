@@ -34,6 +34,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -413,7 +418,7 @@ function InlineCommitPanel({
     isAgentWorking || isCommitting || !hasSandbox || !hasPendingGitWork;
 
   // Commit form
-  return (
+  const commitForm = (
     <div className="space-y-2">
       <div className="relative">
         <Textarea
@@ -440,7 +445,7 @@ function InlineCommitPanel({
       {commitSuccess ? (
         <div className="flex h-8 items-center justify-center gap-1.5 rounded-md border border-green-500/30 bg-green-500/10 text-xs font-medium text-green-700 dark:text-green-300">
           <Check className="h-3.5 w-3.5" />
-          {commitSuccess.commitMessage ?? "Pushed"}
+          Committed
         </div>
       ) : (
         <div className="flex w-full">
@@ -479,16 +484,10 @@ function InlineCommitPanel({
                 onSelect={() => void handleCommit(true)}
                 className="gap-2 text-xs"
               >
-                <GitCommit className="h-3.5 w-3.5 text-muted-foreground" />
                 Commit only
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
-      )}
-      {isAgentWorking && (
-        <div className="rounded-md border border-border bg-muted/40 p-2 text-xs text-muted-foreground">
-          Wait for the agent to finish before committing or pushing.
         </div>
       )}
       {commitError && (
@@ -498,6 +497,25 @@ function InlineCommitPanel({
       )}
     </div>
   );
+
+  const disabledTooltip = isAgentWorking
+    ? "Wait for the agent to finish"
+    : !hasSandbox
+      ? "Waiting for sandbox to start"
+      : null;
+
+  if (disabledTooltip) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div>{commitForm}</div>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{disabledTooltip}</TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return commitForm;
 }
 
 /* ------------------------------------------------------------------ */
@@ -736,7 +754,13 @@ function InlinePrCreatePanel({
 
   // Needs branch creation
   if (needsNewBranch) {
-    return (
+    const branchDisabledTooltip = isAgentWorking
+      ? "Wait for the agent to finish"
+      : !hasSandbox
+        ? "Waiting for sandbox to start"
+        : null;
+
+    const branchContent = (
       <div className="space-y-2">
         <div className="rounded-md border border-border bg-muted/40 p-2 text-xs text-muted-foreground">
           {isDetachedHead
@@ -761,11 +785,6 @@ function InlinePrCreatePanel({
             </>
           )}
         </Button>
-        {isAgentWorking && (
-          <div className="rounded-md border border-border bg-muted/40 p-2 text-xs text-muted-foreground">
-            Wait for the agent to finish before creating a branch.
-          </div>
-        )}
         {prError && (
           <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">
             {prError}
@@ -773,6 +792,19 @@ function InlinePrCreatePanel({
         )}
       </div>
     );
+
+    if (branchDisabledTooltip) {
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div>{branchContent}</div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{branchDisabledTooltip}</TooltipContent>
+        </Tooltip>
+      );
+    }
+
+    return branchContent;
   }
 
   // Uncommitted changes warning
@@ -786,8 +818,14 @@ function InlinePrCreatePanel({
 
   const prDisabled = isAgentWorking || isCreatingPr || !hasSandbox;
 
+  const prDisabledTooltip = isAgentWorking
+    ? "Wait for the agent to finish"
+    : !hasSandbox
+      ? "Waiting for sandbox to start"
+      : null;
+
   // PR creation form
-  return (
+  const prForm = (
     <div className="space-y-2">
       <div className="relative">
         <Input
@@ -854,17 +892,11 @@ function InlinePrCreatePanel({
               onSelect={() => void handleCreatePr(true)}
               className="gap-2 text-xs"
             >
-              <GitPullRequest className="h-3.5 w-3.5 text-muted-foreground" />
               Create Draft PR
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      {isAgentWorking && (
-        <div className="rounded-md border border-border bg-muted/40 p-2 text-xs text-muted-foreground">
-          Wait for the agent to finish before creating a pull request.
-        </div>
-      )}
       {prError && (
         <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">
           {prError}
@@ -872,6 +904,19 @@ function InlinePrCreatePanel({
       )}
     </div>
   );
+
+  if (prDisabledTooltip) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div>{prForm}</div>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{prDisabledTooltip}</TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return prForm;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1108,6 +1153,39 @@ function InlineMergePanel({
 
   const prTitle = readiness?.pr?.title ?? null;
   const prBody = readiness?.pr?.body ?? null;
+
+  if (session.prStatus === "merged") {
+    return (
+      <div className="space-y-3">
+        {prTitle && (
+          <div className="space-y-1.5">
+            <p className="text-sm font-medium text-foreground leading-snug">
+              {prTitle}
+            </p>
+            {prBody && (
+              <p className="text-xs text-muted-foreground leading-relaxed line-clamp-4 whitespace-pre-line">
+                {prBody}
+              </p>
+            )}
+          </div>
+        )}
+        <div className="relative overflow-hidden rounded-md border border-purple-500/30 bg-purple-500/10">
+          <div className="absolute inset-y-0 left-0 w-1 bg-purple-500" />
+          <div className="flex items-center gap-2.5 py-3 pr-3 pl-4">
+            <GitMerge className="h-4 w-4 shrink-0 text-purple-500" />
+            <div className="space-y-0.5">
+              <p className="text-xs font-medium text-foreground">
+                Pull request merged
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                The branch has been merged and can be safely deleted.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
@@ -1407,10 +1485,15 @@ export function GitPanel(props: GitPanelProps) {
               #{session.prNumber}
               <ExternalLink className="h-3 w-3 text-muted-foreground" />
             </a>
-          ) : hasRepo && session.branch ? (
-            <span className="truncate text-xs font-medium text-muted-foreground font-mono">
-              {session.branch}
-            </span>
+          ) : hasRepo && showCreatePrShortcut ? (
+            <button
+              type="button"
+              onClick={() => setGitPanelTab("pr")}
+              className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+            >
+              <GitPullRequest className="h-3.5 w-3.5" />
+              Create PR
+            </button>
           ) : null}
 
           {/* Preview deployment button */}
@@ -1592,17 +1675,6 @@ export function GitPanel(props: GitPanelProps) {
                           </span>
                         )}
                       </div>
-                      {showCreatePrShortcut && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 shrink-0 text-xs"
-                          onClick={() => setGitPanelTab("pr")}
-                        >
-                          <GitPullRequest className="mr-1.5 h-3.5 w-3.5" />
-                          Create PR
-                        </Button>
-                      )}
                     </div>
                   );
                 })()}
