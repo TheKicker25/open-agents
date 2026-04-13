@@ -1,0 +1,202 @@
+{
+  "id": "open-agents-onboarding",
+  "title": "Open Agents Codebase Tour",
+  "description": "Explore the Open Agents monorepo: a Next.js web app powered by an agent runtime that executes tasks in Vercel sandboxes.",
+  "version": "1.0.0",
+  "audience": "New Developers",
+  "prerequisites": [
+    "Familiarity with TypeScript, Next.js, and monorepos (Bun + Turbo)"
+  ],
+  "steps": [
+    {
+      "id": "step-1-overview",
+      "title": "Project Overview",
+      "description": "Open Agents is a monorepo where requests flow from the web app to an agent runtime that executes work inside disposable sandboxes. Two top-level workspaces drive everything: the deployable web application and a set of shared packages for the agent runtime, sandbox abstraction, and shared utilities.",
+      "estimatedTime": 60,
+      "focusDirectory": "",
+      "colorMode": "fileTypes"
+    },
+    {
+      "id": "step-2-workspaces",
+      "title": "Monorepo Workspaces",
+      "description": "The repository splits cleanly in two. One side holds deployable applications, currently just the web frontend. The other side holds the reusable building blocks the web app depends on.",
+      "estimatedTime": 90,
+      "focusDirectory": "",
+      "highlightLayers": [
+        {
+          "id": "apps-layer",
+          "name": "Applications",
+          "color": "#3b82f6",
+          "items": [
+            { "path": "apps", "type": "directory" }
+          ],
+          "opacity": 0.7,
+          "renderStrategy": "border"
+        },
+        {
+          "id": "packages-layer",
+          "name": "Shared Packages",
+          "color": "#10b981",
+          "items": [
+            { "path": "packages", "type": "directory" }
+          ],
+          "opacity": 0.7,
+          "renderStrategy": "border"
+        }
+      ],
+      "colorMode": "fileTypes"
+    },
+    {
+      "id": "step-3-web-app",
+      "title": "Web App (Next.js)",
+      "description": "The web app is the user-facing surface. It separates routes and API handlers from the UI components that render them, and keeps business logic — chat orchestration, database access, the sandbox bridge, and the GitHub integration — in its own dedicated layer.",
+      "estimatedTime": 120,
+      "focusDirectory": "apps/web",
+      "highlightLayers": [
+        {
+          "id": "routes-layer",
+          "name": "Routes & API",
+          "color": "#8b5cf6",
+          "items": [
+            { "path": "apps/web/app", "type": "directory" }
+          ],
+          "opacity": 0.7,
+          "renderStrategy": "border"
+        },
+        {
+          "id": "ui-layer",
+          "name": "UI Components",
+          "color": "#f59e0b",
+          "items": [
+            { "path": "apps/web/components", "type": "directory" }
+          ],
+          "opacity": 0.7,
+          "renderStrategy": "border"
+        },
+        {
+          "id": "logic-layer",
+          "name": "Business Logic",
+          "color": "#06b6d4",
+          "items": [
+            { "path": "apps/web/lib", "type": "directory" }
+          ],
+          "opacity": 0.7,
+          "renderStrategy": "border"
+        }
+      ],
+      "colorMode": "fileTypes"
+    },
+    {
+      "id": "step-4-agent",
+      "title": "Agent Runtime",
+      "description": "This is the core agent loop. A small set of entry modules orchestrates each turn and assembles the system prompt. Around them sit the agent's capabilities: callable tools, reusable skills, and specialized subagents that the main loop can delegate work to.",
+      "estimatedTime": 120,
+      "focusDirectory": "packages/agent",
+      "highlightLayers": [
+        {
+          "id": "agent-core",
+          "name": "Agent Entry",
+          "color": "#ef4444",
+          "items": [
+            { "path": "packages/agent/open-harness-agent.ts", "type": "file" },
+            { "path": "packages/agent/system-prompt.ts", "type": "file" },
+            { "path": "packages/agent/index.ts", "type": "file" }
+          ],
+          "opacity": 0.8,
+          "renderStrategy": "border"
+        },
+        {
+          "id": "agent-capabilities",
+          "name": "Tools, Skills & Subagents",
+          "color": "#a855f7",
+          "items": [
+            { "path": "packages/agent/tools", "type": "directory" },
+            { "path": "packages/agent/skills", "type": "directory" },
+            { "path": "packages/agent/subagents", "type": "directory" }
+          ],
+          "opacity": 0.7,
+          "renderStrategy": "border"
+        }
+      ],
+      "colorMode": "fileTypes"
+    },
+    {
+      "id": "step-5-sandbox",
+      "title": "Sandbox Execution",
+      "description": "The sandbox package abstracts the execution environment. A shared interface defines the contract every provider must satisfy and a factory picks the right implementation at runtime. The Vercel provider is where agent commands actually run today.",
+      "estimatedTime": 90,
+      "focusDirectory": "packages/sandbox",
+      "highlightLayers": [
+        {
+          "id": "sandbox-contract",
+          "name": "Sandbox Interface",
+          "color": "#14b8a6",
+          "items": [
+            { "path": "packages/sandbox/interface.ts", "type": "file" },
+            { "path": "packages/sandbox/factory.ts", "type": "file" },
+            { "path": "packages/sandbox/types.ts", "type": "file" }
+          ],
+          "opacity": 0.8,
+          "renderStrategy": "border"
+        },
+        {
+          "id": "sandbox-impl",
+          "name": "Vercel Provider",
+          "color": "#f97316",
+          "items": [
+            { "path": "packages/sandbox/vercel", "type": "directory" }
+          ],
+          "opacity": 0.7,
+          "renderStrategy": "border"
+        }
+      ],
+      "colorMode": "fileTypes"
+    },
+    {
+      "id": "step-6-database",
+      "title": "Database & Schema",
+      "description": "Drizzle owns the database schema, with migrations generated from changes to the schema and committed alongside them. Pending migrations apply automatically on every deploy, and preview deployments run against isolated branched databases so they never touch production data.",
+      "estimatedTime": 90,
+      "focusDirectory": "apps/web/lib/db",
+      "colorMode": "fileTypes"
+    },
+    {
+      "id": "step-7-config",
+      "title": "Tooling & Configuration",
+      "description": "A handful of root-level files configure the workspace: the package manager and runtime, the task orchestrator that ties the monorepo together, the shared TypeScript settings, and the contributor guides that anchor both human and AI collaborators.",
+      "estimatedTime": 60,
+      "focusDirectory": "",
+      "highlightLayers": [
+        {
+          "id": "config-files",
+          "name": "Root Config",
+          "color": "#eab308",
+          "items": [
+            { "path": "package.json", "type": "file" },
+            { "path": "turbo.json", "type": "file" },
+            { "path": "tsconfig.json", "type": "file" },
+            { "path": "bun.lock", "type": "file" },
+            { "path": "CLAUDE.md", "type": "file" },
+            { "path": "AGENTS.md", "type": "file" }
+          ],
+          "opacity": 0.8,
+          "renderStrategy": "border"
+        }
+      ],
+      "colorMode": "fileTypes"
+    },
+    {
+      "id": "step-8-docs",
+      "title": "Documentation & Next Steps",
+      "description": "From here, the documentation goes deeper: a full architecture walkthrough of how requests move from the web app through the agent and into a sandbox, conventions for contributing, and a living log of lessons learned in this codebase. That is the best place to head next.",
+      "estimatedTime": 60,
+      "focusDirectory": "",
+      "colorMode": "fileTypes"
+    }
+  ],
+  "metadata": {
+    "author": "Claude",
+    "createdAt": "2026-04-13T00:00:00.000Z",
+    "tags": ["onboarding", "monorepo", "agent", "nextjs"]
+  }
+}
